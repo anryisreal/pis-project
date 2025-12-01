@@ -4,265 +4,287 @@ import type { Pattern, PatternDefinition } from '../models/Pattern';
 import { StorageService } from '../services/StorageService';
 
 export class GrammarStore {
-    grammar: Grammar | null = null;
-    isModified: boolean = false;
-    lastSaved: Date | null = null;
-    private patternCounter: number = 1;
+  grammar: Grammar | null = null;
+  isModified: boolean = false;
+  lastSaved: Date | null = null;
+  private patternCounter: number = 1;
 
-    constructor() {
-        makeAutoObservable(this);
+  constructor() {
+    makeAutoObservable(this);
 
-        // ✅ Автосохранение при изменении грамматики
-        reaction(
-            () => this.grammar,
-            (grammar) => {
-                if (grammar && this.isModified) {
-                    StorageService.autoSave(grammar);
-                }
-            },
-            { delay: 1000 } // Debounce 1 секунда
-        );
-    }
-
-    // Создание новой грамматики
-    createNew() {
-        this.grammar = {
-            cell_types_filepath: 'cnf/cell_types.yml',
-            patterns: {},
-            metadata: {
-                name: 'Новая грамматика',
-                author: '',
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString()
-            }
-        };
-        this.patternCounter = 1;
-        this.isModified = false;
-        this.lastSaved = new Date();
-    }
-
-    // ✅ Загрузка грамматики с поддержкой автосохранения
-    loadGrammar(grammar: Grammar) {
-        this.grammar = grammar;
-        this.isModified = false;
-        this.lastSaved = new Date();
-
-        const patternNumbers = Object.keys(grammar.patterns || {})
-            .filter(name => name.startsWith('pattern_'))
-            .map(name => parseInt(name.replace('pattern_', '')))
-            .filter(num => !isNaN(num));
-
-        this.patternCounter = patternNumbers.length > 0
-            ? Math.max(...patternNumbers) + 1
-            : 1;
-    }
-
-    // ✅ Восстановление из автосохранения
-    restoreFromAutoSave(): boolean {
-        const autoSave = StorageService.loadAutoSave();
-        if (autoSave) {
-            this.loadGrammar(autoSave.grammar);
-            console.log('✅ Restored from autosave:', new Date(autoSave.timestamp));
-            return true;
+    reaction(
+      () => this.grammar,
+      (grammar) => {
+        if (grammar && this.isModified) {
+          StorageService.autoSave(grammar);
         }
-        return false;
+      },
+      { delay: 1000 }
+    );
+  }
+
+  createNew() {
+    this.grammar = {
+      cell_types_filepath: 'cnf/cell_types.yml',
+      patterns: {},
+      metadata: {
+        name: 'Новая грамматика',
+        author: '',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }
+    };
+    this.patternCounter = 1;
+    this.isModified = false;
+    this.lastSaved = new Date();
+  }
+
+  loadGrammar(grammar: Grammar) {
+    this.grammar = grammar;
+    this.isModified = false;
+    this.lastSaved = new Date();
+
+    const patternNumbers = Object.keys(grammar.patterns || {})
+      .filter(name => name.startsWith('pattern_'))
+      .map(name => parseInt(name.replace('pattern_', '')))
+      .filter(num => !isNaN(num));
+
+    this.patternCounter = patternNumbers.length > 0
+      ? Math.max(...patternNumbers) + 1
+      : 1;
+  }
+
+  restoreFromAutoSave(): boolean {
+    const autoSave = StorageService.loadAutoSave();
+    if (autoSave) {
+      this.loadGrammar(autoSave.grammar);
+      console.log('✅ Restored from autosave:', new Date(autoSave.timestamp));
+      return true;
+    }
+    return false;
+  }
+
+  addPattern(kind: 'cell' | 'area' | 'array') {
+    if (!this.grammar) return;
+
+    const name = `pattern_${this.patternCounter}`;
+    this.patternCounter++;
+
+    const newPattern: Pattern = {
+      description: `Паттерн ${name}`,
+      kind: kind,
+      // ✅ Cell паттерны НЕ имеют inner/outer
+      inner: kind !== 'cell' ? {} : undefined,
+      outer: kind !== 'cell' ? {} : undefined
+    };
+
+    this.grammar.patterns[name] = newPattern;
+    this.markAsModified();
+
+    return name;
+  }
+
+  updatePattern(name: string, updates: Partial<Pattern>) {
+    if (!this.grammar || !this.grammar.patterns || !this.grammar.patterns[name]) {
+      return;
     }
 
-    // Добавление нового паттерна
-    addPattern(kind: 'cell' | 'area' | 'array') {
-        if (!this.grammar) return;
+    const currentPattern = this.grammar.patterns[name];
+    const newPattern = { ...currentPattern, ...updates };
 
-        const name = `pattern_${this.patternCounter}`;
-        this.patternCounter++;
+    // Если изменился kind - очищаем несовместимые поля
+    if (updates.kind && updates.kind !== currentPattern.kind) {
+      delete newPattern.content_type;
+      delete newPattern.inner;
+      delete newPattern.outer;
+      delete newPattern.direction;
+      delete newPattern.item_pattern;
+      delete newPattern.item_count;
+      delete newPattern.gap;
 
-        const newPattern: Pattern = {
-            description: `Паттерн ${name}`,
-            kind: kind,
-            inner: kind !== 'cell' ? {} : undefined,
-            outer: {}
-        };
-
-        this.grammar.patterns[name] = newPattern;
-        this.markAsModified();
-
-        return name;
+      if (updates.kind === 'cell') {
+        // ✅ Cell НЕ имеет inner/outer
+        newPattern.content_type = '';
+      } else if (updates.kind === 'area') {
+        newPattern.inner = {};
+        newPattern.outer = {};
+      } else if (updates.kind === 'array') {
+        newPattern.inner = {};
+        newPattern.outer = {};
+        newPattern.direction = 'row';
+        newPattern.item_pattern = '';
+      }
     }
 
-    // Обновление паттерна с очисткой при смене типа
-    updatePattern(name: string, updates: Partial<Pattern>) {
-        if (!this.grammar || !this.grammar.patterns || !this.grammar.patterns[name]) {
-            return;
-        }
+    this.grammar.patterns[name] = newPattern;
+    this.markAsModified();
+  }
 
-        const currentPattern = this.grammar.patterns[name];
-        const newPattern = { ...currentPattern, ...updates };
+  deletePattern(name: string) {
+    if (!this.grammar || !this.grammar.patterns) return;
 
-        // Если изменился kind - очищаем несовместимые поля
-        if (updates.kind && updates.kind !== currentPattern.kind) {
-            delete newPattern.content_type;
-            delete newPattern.inner;
-            delete newPattern.direction;
-            delete newPattern.item_pattern;
-            delete newPattern.item_count;
-            delete newPattern.gap;
+    delete this.grammar.patterns[name];
+    this.markAsModified();
+  }
 
-            if (updates.kind === 'cell') {
-                newPattern.content_type = '';
-            } else if (updates.kind === 'area') {
-                newPattern.inner = {};
-                newPattern.outer = {};
-            } else if (updates.kind === 'array') {
-                newPattern.inner = {};
-                newPattern.outer = {};
-                newPattern.direction = 'row';
-                newPattern.item_pattern = '';
-            }
-        }
+  findPatternByName(name: string): Pattern | null {
+    if (!this.grammar || !this.grammar.patterns) return null;
+    return this.grammar.patterns[name] || null;
+  }
 
-        this.grammar.patterns[name] = newPattern;
-        this.markAsModified();
+  // ✅ Проверка: можно ли добавлять inner/outer
+  canHaveInnerOuter(patternName: string): boolean {
+    const pattern = this.findPatternByName(patternName);
+    return pattern ? pattern.kind !== 'cell' : false;
+  }
+
+  addInnerElement(patternName: string, innerKey: string, innerPatternRef: string) {
+    const pattern = this.findPatternByName(patternName);
+
+    // ✅ Запрет для cell паттернов
+    if (!pattern || pattern.kind === 'cell' || !pattern.inner) {
+      console.warn(`Cannot add inner element to ${patternName}: pattern is cell or doesn't support inner`);
+      return;
     }
 
-    deletePattern(name: string) {
-        if (!this.grammar || !this.grammar.patterns) return;
+    pattern.inner[innerKey] = {
+      pattern: innerPatternRef,
+      location: {
+        'padding-top': '0',
+        'padding-left': '0',
+        'padding-right': '0',
+        'padding-bottom': '0'
+      }
+    };
 
-        delete this.grammar.patterns[name];
-        this.markAsModified();
+    this.markAsModified();
+  }
+
+  addInnerInlineDefinition(
+    patternName: string,
+    innerKey: string,
+    definition: PatternDefinition
+  ) {
+    const pattern = this.findPatternByName(patternName);
+
+    // ✅ Запрет для cell паттернов
+    if (!pattern || pattern.kind === 'cell' || !pattern.inner) {
+      console.warn(`Cannot add inner element to ${patternName}: pattern is cell`);
+      return;
     }
 
-    findPatternByName(name: string): Pattern | null {
-        if (!this.grammar || !this.grammar.patterns) return null;
-        return this.grammar.patterns[name] || null;
+    pattern.inner[innerKey] = {
+      pattern_definition: definition,
+      location: {
+        'padding-top': '0',
+        'padding-left': '0',
+        'padding-right': '0',
+        'padding-bottom': '0'
+      }
+    };
+
+    this.markAsModified();
+  }
+
+  removeInnerElement(patternName: string, innerKey: string) {
+    const pattern = this.findPatternByName(patternName);
+    if (!pattern || !pattern.inner) return;
+
+    delete pattern.inner[innerKey];
+    this.markAsModified();
+  }
+
+  addOuterElement(patternName: string, outerKey: string, outerPatternRef: string) {
+    const pattern = this.findPatternByName(patternName);
+
+    // ✅ Запрет для cell паттернов
+    if (!pattern || pattern.kind === 'cell') {
+      console.warn(`Cannot add outer element to ${patternName}: pattern is cell`);
+      return;
     }
 
-    // Добавление inner элемента (ссылка на паттерн)
-    addInnerElement(patternName: string, innerKey: string, innerPatternRef: string) {
-        const pattern = this.findPatternByName(patternName);
-        if (!pattern || !pattern.inner) return;
-
-        pattern.inner[innerKey] = {
-            pattern: innerPatternRef,
-            location: ['top', 'left', 'right', 'bottom']
-        };
-
-        this.markAsModified();
+    if (!pattern.outer) {
+      pattern.outer = {};
     }
 
-    // ✅ НОВОЕ: Добавление inline definition
-    addInnerInlineDefinition(
-        patternName: string,
-        innerKey: string,
-        definition: PatternDefinition
-    ) {
-        const pattern = this.findPatternByName(patternName);
-        if (!pattern || !pattern.inner) return;
+    pattern.outer[outerKey] = {
+      pattern: outerPatternRef,
+      location: {
+        'margin-top': '0',
+        'margin-left': '0',
+        'margin-right': '0',
+        'margin-bottom': '0'
+      }
+    };
 
-        pattern.inner[innerKey] = {
-            pattern_definition: definition,
-            location: ['top', 'left', 'right', 'bottom']
-        };
+    this.markAsModified();
+  }
 
-        this.markAsModified();
+  removeOuterElement(patternName: string, outerKey: string) {
+    const pattern = this.findPatternByName(patternName);
+    if (!pattern || !pattern.outer) return;
+
+    delete pattern.outer[outerKey];
+    this.markAsModified();
+  }
+
+  updateInnerLocation(patternName: string, innerKey: string, location: any) {
+    const pattern = this.findPatternByName(patternName);
+    if (!pattern || !pattern.inner || !pattern.inner[innerKey]) return;
+
+    const currentLocation = pattern.inner[innerKey].location;
+
+    if (typeof currentLocation === 'object' && !Array.isArray(currentLocation)) {
+      pattern.inner[innerKey].location = {
+        ...currentLocation,
+        ...location
+      };
+    } else {
+      pattern.inner[innerKey].location = location;
     }
 
-    removeInnerElement(patternName: string, innerKey: string) {
-        const pattern = this.findPatternByName(patternName);
-        if (!pattern || !pattern.inner) return;
+    this.markAsModified();
+  }
 
-        delete pattern.inner[innerKey];
-        this.markAsModified();
+  updateOuterLocation(patternName: string, outerKey: string, location: any) {
+    const pattern = this.findPatternByName(patternName);
+    if (!pattern || !pattern.outer || !pattern.outer[outerKey]) return;
+
+    const currentLocation = pattern.outer[outerKey].location;
+
+    if (typeof currentLocation === 'object' && !Array.isArray(currentLocation)) {
+      pattern.outer[outerKey].location = {
+        ...currentLocation,
+        ...location
+      };
+    } else {
+      pattern.outer[outerKey].location = location;
     }
 
-    addOuterElement(patternName: string, outerKey: string, outerPatternRef: string) {
-        const pattern = this.findPatternByName(patternName);
-        if (!pattern) return;
+    this.markAsModified();
+  }
 
-        if (!pattern.outer) {
-            pattern.outer = {};
-        }
-
-        pattern.outer[outerKey] = {
-            pattern: outerPatternRef,
-            location: {
-                'margin-top': '0',
-                'margin-left': '0',
-                'margin-right': '0',
-                'margin-bottom': '0'
-            }
-        };
-
-        this.markAsModified();
+  private markAsModified() {
+    this.isModified = true;
+    if (this.grammar?.metadata) {
+      this.grammar.metadata.updatedAt = new Date().toISOString();
     }
+  }
 
-    removeOuterElement(patternName: string, outerKey: string) {
-        const pattern = this.findPatternByName(patternName);
-        if (!pattern || !pattern.outer) return;
+  get allPatterns() {
+    if (!this.grammar || !this.grammar.patterns) return [];
 
-        delete pattern.outer[outerKey];
-        this.markAsModified();
-    }
+    return Object.entries(this.grammar.patterns).map(([name, pattern]) => ({
+      name,
+      ...pattern
+    }));
+  }
 
-    updateInnerLocation(patternName: string, innerKey: string, location: any) {
-        const pattern = this.findPatternByName(patternName);
-        if (!pattern || !pattern.inner || !pattern.inner[innerKey]) return;
+  getPatternsByKind(kind: 'cell' | 'area' | 'array') {
+    return this.allPatterns.filter(p => p.kind === kind);
+  }
 
-        // Сохраняем текущую location и обновляем только переданные поля
-        const currentLocation = pattern.inner[innerKey].location;
-
-        if (typeof currentLocation === 'object' && !Array.isArray(currentLocation)) {
-            pattern.inner[innerKey].location = {
-                ...currentLocation,
-                ...location
-            };
-        } else {
-            pattern.inner[innerKey].location = location;
-        }
-
-        this.markAsModified();
-    }
-
-    updateOuterLocation(patternName: string, outerKey: string, location: any) {
-        const pattern = this.findPatternByName(patternName);
-        if (!pattern || !pattern.outer || !pattern.outer[outerKey]) return;
-
-        // Сохраняем текущую location и обновляем только переданные поля
-        const currentLocation = pattern.outer[outerKey].location;
-
-        if (typeof currentLocation === 'object' && !Array.isArray(currentLocation)) {
-            pattern.outer[outerKey].location = {
-                ...currentLocation,
-                ...location
-            };
-        } else {
-            pattern.outer[outerKey].location = location;
-        }
-
-        this.markAsModified();
-    }
-
-    private markAsModified() {
-        this.isModified = true;
-        if (this.grammar?.metadata) {
-            this.grammar.metadata.updatedAt = new Date().toISOString();
-        }
-    }
-
-    get allPatterns() {
-        if (!this.grammar || !this.grammar.patterns) return [];
-
-        return Object.entries(this.grammar.patterns).map(([name, pattern]) => ({
-            name,
-            ...pattern
-        }));
-    }
-
-    getPatternsByKind(kind: 'cell' | 'area' | 'array') {
-        return this.allPatterns.filter(p => p.kind === kind);
-    }
-
-    // ✅ Дополнительный метод для обратной совместимости
-    updateCellType(patternName: string, updates: Partial<Pattern>) {
-        // Просто алиас для updatePattern
-        this.updatePattern(patternName, updates);
-    }
+  updateCellType(patternName: string, updates: Partial<Pattern>) {
+    this.updatePattern(patternName, updates);
+  }
 }

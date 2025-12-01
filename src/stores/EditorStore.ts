@@ -1,20 +1,44 @@
 import { makeAutoObservable } from 'mobx';
-import {type EditorState, type EditorMode, type EditorTool } from '../models/EditorState';
-import type {Position} from "../models/VisualElement.ts";
+import { type EditorMode, type EditorTool } from '../models/EditorState';
+import type { Position } from "../models/VisualElement.ts";
+
+export interface EditorState {
+  selectedElements: string[];
+  hoveredElement: string | null;
+  hoveredInnerOuterElement: string | null; // NEW: для отслеживания наведения на inner/outer
+  mode: EditorMode;
+  tool: EditorTool;
+  zoom: number;
+  pan: Position;
+  isFocusMode: boolean; // NEW: режим фокуса на паттерне
+}
 
 export class EditorStore {
   state: EditorState = {
     selectedElements: [],
     hoveredElement: null,
+    hoveredInnerOuterElement: null,
     mode: 'select',
     tool: 'pointer',
     zoom: 1,
-    pan: { x: 0, y: 0 }
+    pan: { x: 0, y: 0 },
+    isFocusMode: false
   };
 
   constructor() {
     makeAutoObservable(this);
+
+    // Слушаем нажатие ESC для выхода из режима фокуса
+    if (typeof window !== 'undefined') {
+      window.addEventListener('keydown', this.handleKeyDown);
+    }
   }
+
+  private handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && this.state.isFocusMode) {
+      this.exitFocusMode();
+    }
+  };
 
   // Выбор элемента
   selectElement(id: string, addToSelection: boolean = false) {
@@ -25,6 +49,8 @@ export class EditorStore {
     } else {
       this.state.selectedElements = [id];
     }
+    // Входим в режим фокуса при выборе паттерна
+    this.state.isFocusMode = true;
   }
 
   // Снятие выбора
@@ -32,16 +58,32 @@ export class EditorStore {
     this.state.selectedElements = this.state.selectedElements.filter(
       selectedId => selectedId !== id
     );
+    if (this.state.selectedElements.length === 0) {
+      this.exitFocusMode();
+    }
   }
 
   // Снятие всех выборов
   deselectAll() {
     this.state.selectedElements = [];
+    this.exitFocusMode();
+  }
+
+  // Выход из режима фокуса
+  exitFocusMode() {
+    this.state.isFocusMode = false;
+    this.state.selectedElements = [];
+    this.state.hoveredInnerOuterElement = null;
   }
 
   // Наведение на элемент
   setHoveredElement(id: string | null) {
     this.state.hoveredElement = id;
+  }
+
+  // NEW: Наведение на inner/outer элемент
+  setHoveredInnerOuterElement(id: string | null) {
+    this.state.hoveredInnerOuterElement = id;
   }
 
   // Смена режима
@@ -87,5 +129,11 @@ export class EditorStore {
 
   isHovered(id: string): boolean {
     return this.state.hoveredElement === id;
+  }
+
+  dispose() {
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('keydown', this.handleKeyDown);
+    }
   }
 }
