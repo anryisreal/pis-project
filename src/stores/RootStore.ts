@@ -11,5 +11,7 @@ export class RootStore {
     this.grammarStore = new GrammarStore();
     this.editorStore = new EditorStore();
     this.historyStore = new HistoryStore();
+
+    this.editorStore.setGrammarStore(this.grammarStore);
   }
 }

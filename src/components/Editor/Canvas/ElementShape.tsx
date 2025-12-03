@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useEditorStore } from '../../../hooks/useStores';
 
 interface ElementShapeProps {
   element: {
@@ -13,11 +14,13 @@ interface ElementShapeProps {
   isSelected: boolean;
   isHovered: boolean;
   onSelect: () => void;
+  onMakeActive?: () => void; // ✅ Прямая активация без меню (для mousedown)
   onHover: () => void;
   onHoverEnd: () => void;
   onPositionChange?: (id: string, x: number, y: number) => void;
   isInFocusMode?: boolean;
-  isMainSelected?: boolean;
+  displayName?: string;
+  hasActiveElement?: boolean;
 }
 
 export const ElementShape: React.FC<ElementShapeProps> = ({
@@ -25,14 +28,18 @@ export const ElementShape: React.FC<ElementShapeProps> = ({
                                                             isSelected,
                                                             isHovered,
                                                             onSelect,
+                                                            onMakeActive,
                                                             onHover,
                                                             onHoverEnd,
                                                             onPositionChange,
                                                             isInFocusMode = false,
-                                                            isMainSelected = false
+                                                            displayName,
+                                                            hasActiveElement = false
                                                           }) => {
+  const editorStore = useEditorStore();
   const [isDragging, setIsDragging] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+  const [dragStarted, setDragStarted] = useState(false);
+  const [justMadeActive, setJustMadeActive] = useState(false); // ✅ Флаг активации
 
   const getColorByKind = (kind: string) => {
     const colors: Record<string, string> = {
@@ -44,91 +51,160 @@ export const ElementShape: React.FC<ElementShapeProps> = ({
   };
 
   const handleMouseDown = (e: React.MouseEvent) => {
-    // В режиме фокуса разрешаем перетаскивание только для главного выбранного элемента
-    if (isInFocusMode && !isMainSelected) {
-      return;
-    }
-
-    if (!isSelected) {
-      onSelect();
-      return;
-    }
+    console.log('=== ElementShape handleMouseDown ===');
+    console.log('element.id:', element.id);
+    console.log('isSelected:', isSelected);
+    console.log('isInFocusMode:', isInFocusMode);
+    console.log('hasActiveElement:', hasActiveElement);
 
     e.stopPropagation();
-    e.preventDefault();
-    setIsDragging(true);
+    // ✅ НЕ вызываем preventDefault - это блокирует onClick
 
-    const svg = (e.target as SVGElement).ownerSVGElement;
-    if (!svg) return;
+    // ✅ В режиме фокуса: если элемент неактивный, делаем его активным БЕЗ меню
+    if (isInFocusMode && !isSelected && onMakeActive) {
+      console.log('✅ Making element active (not selected in focus mode)');
+      // Вызываем onMakeActive для прямой активации без проверки перекрытий
+      onMakeActive();
+      setJustMadeActive(true); // ✅ Блокируем следующий onClick
+      return; // Не начинаем перетаскивание, ждём следующего клика
+    }
 
-    const pt = svg.createSVGPoint();
-    pt.x = e.clientX;
-    pt.y = e.clientY;
-
-    const svgP = pt.matrixTransform(svg.getScreenCTM()?.inverse());
-
-    setDragOffset({
-      x: svgP.x - element.x,
-      y: svgP.y - element.y
-    });
-
-    const handleGlobalMouseMove = (globalE: MouseEvent) => {
-      globalE.preventDefault();
-
+    // Если элемент уже выбран, начинаем перетаскивание
+    if (isSelected) {
+      console.log('✅ Starting drag');
       const svg = (e.target as SVGElement).ownerSVGElement;
       if (!svg) return;
 
       const pt = svg.createSVGPoint();
-      pt.x = globalE.clientX;
-      pt.y = globalE.clientY;
+      pt.x = e.clientX;
+      pt.y = e.clientY;
 
       const svgP = pt.matrixTransform(svg.getScreenCTM()?.inverse());
 
-      const newX = svgP.x - dragOffset.x;
-      const newY = svgP.y - dragOffset.y;
+      // Вычисляем offset относительно ТЕКУЩЕЙ позиции элемента
+      const initialOffset = {
+        x: svgP.x - element.x,
+        y: svgP.y - element.y
+      };
 
-      if (onPositionChange) {
-        onPositionChange(element.id, newX, newY);
-      }
-    };
+      setIsDragging(true);
+      // ✅ ИСПРАВЛЕНИЕ: dragStarted ставим в false сначала
+      setDragStarted(false);
 
-    const handleGlobalMouseUp = () => {
-      setIsDragging(false);
-      document.removeEventListener('mousemove', handleGlobalMouseMove);
-      document.removeEventListener('mouseup', handleGlobalMouseUp);
-    };
+      let hasMoved = false; // Флаг реального перемещения
 
-    document.addEventListener('mousemove', handleGlobalMouseMove);
-    document.addEventListener('mouseup', handleGlobalMouseUp);
+      const handleGlobalMouseMove = (globalE: MouseEvent) => {
+        globalE.preventDefault();
+
+        if (!svg) return;
+
+        const pt = svg.createSVGPoint();
+        pt.x = globalE.clientX;
+        pt.y = globalE.clientY;
+
+        const svgP = pt.matrixTransform(svg.getScreenCTM()?.inverse());
+
+        const newX = svgP.x - initialOffset.x;
+        const newY = svgP.y - initialOffset.y;
+
+        // ✅ Если была хоть какая-то дельта - это реальное перетаскивание
+        if (Math.abs(newX - element.x) > 1 || Math.abs(newY - element.y) > 1) {
+          hasMoved = true;
+          setDragStarted(true);
+        }
+
+        if (onPositionChange) {
+          onPositionChange(element.id, newX, newY);
+        }
+      };
+
+      const handleGlobalMouseUp = () => {
+        setIsDragging(false);
+
+        // ✅ Если не было движения - НЕ считаем это перетаскиванием
+        if (!hasMoved) {
+          setDragStarted(false);
+        }
+        // Иначе dragStarted останется true и onClick его сбросит
+
+        document.removeEventListener('mousemove', handleGlobalMouseMove);
+        document.removeEventListener('mouseup', handleGlobalMouseUp);
+      };
+
+      document.addEventListener('mousemove', handleGlobalMouseMove);
+      document.addEventListener('mouseup', handleGlobalMouseUp);
+    } else {
+      console.log('❌ NOT starting drag - isSelected is false');
+    }
   };
 
-  const handleMouseMove = () => {};
-  const handleMouseUp = () => {};
+  const handleClick = (e: React.MouseEvent) => {
+    console.log('=== ElementShape handleClick ===');
+    console.log('element.id:', element.id);
+    console.log('element.kind:', element.kind);
+    console.log('dragStarted:', dragStarted);
+    console.log('justMadeActive:', justMadeActive);
+    console.log('isInFocusMode:', isInFocusMode);
+    console.log('isSelected:', isSelected);
+
+    e.stopPropagation();
+
+    // Если было перетаскивание - игнорируем клик
+    if (dragStarted) {
+      console.log('❌ Ignoring click - was dragging');
+      setDragStarted(false);
+      return;
+    }
+
+    // ✅ Если только что сделали активным - игнорируем клик
+    if (justMadeActive) {
+      console.log('❌ Ignoring click - just made active');
+      setJustMadeActive(false);
+      return;
+    }
+
+    // ✅ ИСПРАВЛЕНИЕ: Вызываем onSelect всегда (убрали проверку isInFocusMode)
+    // Это нужно для показа меню перекрытий в режиме фокуса
+    console.log('✅ About to call onSelect()');
+    onSelect();
+    console.log('✅ onSelect() called');
+  };
 
   const color = getColorByKind(element.kind);
+  // ✅ Непрозрачные: выбранные ИЛИ inner элементы в режиме фокуса
   const fillColor = isSelected ? color : color + '66';
   const strokeColor = isSelected ? '#1e40af' : color;
   const strokeWidth = isSelected ? 3 : 2;
 
-  // В режиме фокуса inner/outer элементы не перетаскиваются
-  const canDrag = !isInFocusMode || isMainSelected;
-  const cursor = isDragging ? 'grabbing' : (canDrag && isSelected ? 'grab' : 'pointer');
+  const cursor = isDragging ? 'grabbing' : (isSelected ? 'grab' : 'pointer');
+
+  // ✅ В режиме фокуса: если есть активный элемент (не я) - пропускаю события вниз
+  // Это позволяет кликать на нижний активный элемент через верхний неактивный
+  const pointerEvents = (isInFocusMode && hasActiveElement && !isSelected) ? 'none' : 'auto';
+
+  const elementDisplayName = displayName || element.name;
 
   return (
     <g
       className="element-shape"
-      onMouseEnter={onHover}
-      onMouseLeave={onHoverEnd}
-      onClick={(e) => {
-        if (!isDragging) {
-          e.stopPropagation();
-          onSelect();
+      style={{
+        cursor,
+        pointerEvents // ✅ Пропускаем события через неактивные элементы к активному
+      }}
+      onMouseEnter={() => {
+        onHover();
+        if (isInFocusMode) {
+          editorStore.setHoveredInnerOuterElement(element.name);
         }
       }}
+      onMouseLeave={() => {
+        onHoverEnd();
+        if (isInFocusMode) {
+          editorStore.setHoveredInnerOuterElement(null);
+        }
+      }}
+      onClick={handleClick}
       onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      style={{ cursor }}
     >
       <rect
         x={element.x}
@@ -150,7 +226,7 @@ export const ElementShape: React.FC<ElementShapeProps> = ({
         fill="#1f2937"
         pointerEvents="none"
       >
-        {element.name}
+        {elementDisplayName}
       </text>
 
       <rect
@@ -173,34 +249,11 @@ export const ElementShape: React.FC<ElementShapeProps> = ({
         {element.kind}
       </text>
 
-      {isSelected && !isDragging && canDrag && (
+      {isSelected && !isDragging && (
         <g pointerEvents="none">
           <circle cx={element.x + element.width / 2} cy={element.y + 10} r="3" fill="#1e40af" opacity="0.6" />
           <circle cx={element.x + element.width / 2 - 8} cy={element.y + 10} r="2" fill="#1e40af" opacity="0.4" />
           <circle cx={element.x + element.width / 2 + 8} cy={element.y + 10} r="2" fill="#1e40af" opacity="0.4" />
-        </g>
-      )}
-
-      {/* Индикатор что элемент заблокирован в режиме фокуса */}
-      {isInFocusMode && !isMainSelected && (
-        <g pointerEvents="none">
-          <rect
-            x={element.x + 5}
-            y={element.y + element.height - 25}
-            width="20"
-            height="20"
-            fill="rgba(0,0,0,0.7)"
-            rx="3"
-          />
-          <text
-            x={element.x + 15}
-            y={element.y + element.height - 11}
-            fontSize="12"
-            fill="white"
-            textAnchor="middle"
-          >
-            🔒
-          </text>
         </g>
       )}
     </g>

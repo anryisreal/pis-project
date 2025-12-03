@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import type { Pattern, LocationObject } from '../../../models/Pattern';
-import { useEditorStore } from '../../../hooks/useStores';
 
 interface PatternVisualizationProps {
   pattern: Pattern;
@@ -14,7 +13,8 @@ interface PatternVisualizationProps {
   hoveredInnerOuterElement: string | null;
   onUpdateLocation: (type: 'inner' | 'outer', key: string, location: LocationObject) => void;
   allElements?: Array<{ id: string; name: string; x: number; y: number; width: number; height: number }>;
-  showBorderOnly?: boolean;
+  fixedBoundingBox?: { x: number; y: number; width: number; height: number };
+  onUpdateBoundingBox?: (bbox: { x: number; y: number; width: number; height: number }) => void; // ✅ NEW
 }
 
 const CELL_SIZE = 20;
@@ -30,9 +30,9 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
                                                                             hoveredInnerOuterElement,
                                                                             onUpdateLocation,
                                                                             allElements = [],
-                                                                            showBorderOnly = false
+                                                                            fixedBoundingBox,
+                                                                            onUpdateBoundingBox
                                                                           }) => {
-  const editorStore = useEditorStore();
   const [draggingHandle, setDraggingHandle] = useState<{
     type: 'inner' | 'outer';
     key: string;
@@ -45,6 +45,12 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
   };
 
   const calculateBoundingBox = () => {
+    // Если есть фиксированная граница - используем её
+    if (fixedBoundingBox) {
+      return fixedBoundingBox;
+    }
+
+    // Иначе вычисляем динамически
     let minX = x;
     let minY = y;
     let maxX = x + width;
@@ -90,6 +96,7 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
   };
 
   const handleMouseMove = (e: React.MouseEvent<SVGGElement>) => {
+    // Обработка изменения padding/margin стрелок
     if (!draggingHandle || isFocusMode) return;
 
     const svg = (e.target as SVGElement).ownerSVGElement;
@@ -140,23 +147,135 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
     setDraggingHandle(null);
   };
 
-  const bbox = calculateBoundingBox();
+  // ✅ NEW: Обработчики для изменения границы
+  const handleBoundaryMouseDown = (
+    side: 'top' | 'right' | 'bottom' | 'left' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right',
+    e: React.MouseEvent
+  ) => {
+    if (!isFocusMode || !onUpdateBoundingBox || !fixedBoundingBox) return;
 
-  if (showBorderOnly) {
-    return (
-      <g style={{ pointerEvents: 'none' }}>
-        <rect
-          x={bbox.x}
-          y={bbox.y}
-          width={bbox.width}
-          height={bbox.height}
-          fill="transparent"
-          stroke="black"
-          strokeWidth={3}
-        />
-      </g>
-    );
-  }
+    e.stopPropagation();
+    e.preventDefault();
+
+    const svg = (e.target as SVGElement).ownerSVGElement;
+    if (!svg) return;
+
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX;
+    pt.y = e.clientY;
+    const svgP = pt.matrixTransform(svg.getScreenCTM()?.inverse());
+
+    // ✅ Вычисляем минимальный bbox, охватывающий все inner элементы
+    let minBbox = { x: Infinity, y: Infinity, maxX: -Infinity, maxY: -Infinity };
+
+    if (pattern.inner) {
+      Object.values(pattern.inner).forEach(innerPattern => {
+        if (!innerPattern.pattern) return;
+        const innerElement = findElement(innerPattern.pattern);
+        if (!innerElement) return;
+
+        minBbox.x = Math.min(minBbox.x, innerElement.x);
+        minBbox.y = Math.min(minBbox.y, innerElement.y);
+        minBbox.maxX = Math.max(minBbox.maxX, innerElement.x + innerElement.width);
+        minBbox.maxY = Math.max(minBbox.maxY, innerElement.y + innerElement.height);
+      });
+    }
+
+    // Если нет inner элементов, используем минимальный размер
+    const hasInnerElements = minBbox.x !== Infinity;
+
+    const startBbox = { ...fixedBoundingBox };
+    const startMouse = { x: svgP.x, y: svgP.y };
+
+    // ✅ ИСПРАВЛЕНИЕ: Используем глобальные слушатели для надёжности
+    const handleGlobalMouseMove = (globalE: MouseEvent) => {
+      globalE.preventDefault();
+
+      const svg = (e.target as SVGElement).ownerSVGElement;
+      if (!svg) return;
+
+      const pt = svg.createSVGPoint();
+      pt.x = globalE.clientX;
+      pt.y = globalE.clientY;
+      const svgP = pt.matrixTransform(svg.getScreenCTM()?.inverse());
+
+      const deltaX = svgP.x - startMouse.x;
+      const deltaY = svgP.y - startMouse.y;
+
+      let newBbox = { ...startBbox };
+
+      // Изменяем bbox в зависимости от стороны
+      if (side === 'top' || side === 'top-left' || side === 'top-right') {
+        newBbox.y = startBbox.y + deltaY;
+        newBbox.height = startBbox.height - deltaY;
+      }
+      if (side === 'bottom' || side === 'bottom-left' || side === 'bottom-right') {
+        newBbox.height = startBbox.height + deltaY;
+      }
+      if (side === 'left' || side === 'top-left' || side === 'bottom-left') {
+        newBbox.x = startBbox.x + deltaX;
+        newBbox.width = startBbox.width - deltaX;
+      }
+      if (side === 'right' || side === 'top-right' || side === 'bottom-right') {
+        newBbox.width = startBbox.width + deltaX;
+      }
+
+      // ✅ ИСПРАВЛЕНИЕ: Ограничиваем минимальным размером, охватывающим inner элементы
+      if (hasInnerElements) {
+        // Проверяем, что новый bbox охватывает все inner элементы
+        if (side.includes('left')) {
+          // При изменении слева - не можем уйти правее левого края inner элементов
+          newBbox.x = Math.min(newBbox.x, minBbox.x);
+          newBbox.width = startBbox.x + startBbox.width - newBbox.x;
+        }
+        if (side.includes('right')) {
+          // При изменении справа - не можем уйти левее правого края inner элементов
+          const rightEdge = newBbox.x + newBbox.width;
+          if (rightEdge < minBbox.maxX) {
+            newBbox.width = minBbox.maxX - newBbox.x;
+          }
+        }
+        if (side.includes('top')) {
+          // При изменении сверху - не можем уйти ниже верхнего края inner элементов
+          newBbox.y = Math.min(newBbox.y, minBbox.y);
+          newBbox.height = startBbox.y + startBbox.height - newBbox.y;
+        }
+        if (side.includes('bottom')) {
+          // При изменении снизу - не можем уйти выше нижнего края inner элементов
+          const bottomEdge = newBbox.y + newBbox.height;
+          if (bottomEdge < minBbox.maxY) {
+            newBbox.height = minBbox.maxY - newBbox.y;
+          }
+        }
+      } else {
+        // Если нет inner элементов, просто минимальный размер 100x100
+        if (newBbox.width < 100) {
+          newBbox.width = 100;
+          if (side.includes('left')) {
+            newBbox.x = startBbox.x + startBbox.width - 100;
+          }
+        }
+        if (newBbox.height < 100) {
+          newBbox.height = 100;
+          if (side.includes('top')) {
+            newBbox.y = startBbox.y + startBbox.height - 100;
+          }
+        }
+      }
+
+      onUpdateBoundingBox(newBbox);
+    };
+
+    const handleGlobalMouseUp = () => {
+      document.removeEventListener('mousemove', handleGlobalMouseMove);
+      document.removeEventListener('mouseup', handleGlobalMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleGlobalMouseMove);
+    document.addEventListener('mouseup', handleGlobalMouseUp);
+  };
+
+  const bbox = calculateBoundingBox();
 
   if (!isSelected) return null;
 
@@ -171,7 +290,7 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
       const innerElement = findElement(innerPattern.pattern);
       if (!innerElement) return;
 
-      // Показываем стрелки только если этот элемент наведен
+      // Показываем стрелки ТОЛЬКО если этот элемент наведён
       const isHovered = hoveredInnerOuterElement === innerPattern.pattern;
       if (!isHovered) return;
 
@@ -266,7 +385,7 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
       const outerElement = findElement(outerPattern.pattern);
       if (!outerElement) return;
 
-      // Показываем стрелки только если этот элемент наведен
+      // Показываем стрелки ТОЛЬКО если этот элемент наведён
       const isHovered = hoveredInnerOuterElement === outerPattern.pattern;
       if (!isHovered) return;
 
@@ -390,7 +509,7 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
     >
       {outerVisualizations}
 
-      {/* Черная граница - ЗАФИКСИРОВАНА в режиме фокуса */}
+      {/* Чёрная граница - ЗАФИКСИРОВАНА в режиме фокуса */}
       <rect
         x={bbox.x}
         y={bbox.y}
@@ -420,46 +539,62 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
 
       {innerVisualizations}
 
-      {/* Обработчики наведения для inner/outer элементов */}
-      {pattern.inner && Object.values(pattern.inner).map((innerPattern) => {
-        if (!innerPattern.pattern) return null;
-        const innerElement = findElement(innerPattern.pattern);
-        if (!innerElement) return null;
-
-        return (
-          <rect
-            key={`hover-inner-${innerPattern.pattern}`}
-            x={innerElement.x}
-            y={innerElement.y}
-            width={innerElement.width}
-            height={innerElement.height}
-            fill="transparent"
-            style={{ pointerEvents: 'all' }}
-            onMouseEnter={() => editorStore.setHoveredInnerOuterElement(innerPattern.pattern!)}
-            onMouseLeave={() => editorStore.setHoveredInnerOuterElement(null)}
+      {/* ✅ Ручки для изменения границы в режиме фокуса */}
+      {isFocusMode && onUpdateBoundingBox && (
+        <g>
+          {/* Угловые ручки */}
+          <BoundaryHandle
+            x={bbox.x}
+            y={bbox.y}
+            cursor="nwse-resize"
+            onMouseDown={(e) => handleBoundaryMouseDown('top-left', e)}
           />
-        );
-      })}
-
-      {pattern.outer && Object.values(pattern.outer).map((outerPattern) => {
-        if (!outerPattern.pattern) return null;
-        const outerElement = findElement(outerPattern.pattern);
-        if (!outerElement) return null;
-
-        return (
-          <rect
-            key={`hover-outer-${outerPattern.pattern}`}
-            x={outerElement.x}
-            y={outerElement.y}
-            width={outerElement.width}
-            height={outerElement.height}
-            fill="transparent"
-            style={{ pointerEvents: 'all' }}
-            onMouseEnter={() => editorStore.setHoveredInnerOuterElement(outerPattern.pattern)}
-            onMouseLeave={() => editorStore.setHoveredInnerOuterElement(null)}
+          <BoundaryHandle
+            x={bbox.x + bbox.width}
+            y={bbox.y}
+            cursor="nesw-resize"
+            onMouseDown={(e) => handleBoundaryMouseDown('top-right', e)}
           />
-        );
-      })}
+          <BoundaryHandle
+            x={bbox.x}
+            y={bbox.y + bbox.height}
+            cursor="nesw-resize"
+            onMouseDown={(e) => handleBoundaryMouseDown('bottom-left', e)}
+          />
+          <BoundaryHandle
+            x={bbox.x + bbox.width}
+            y={bbox.y + bbox.height}
+            cursor="nwse-resize"
+            onMouseDown={(e) => handleBoundaryMouseDown('bottom-right', e)}
+          />
+
+          {/* Боковые ручки */}
+          <BoundaryHandle
+            x={bbox.x + bbox.width / 2}
+            y={bbox.y}
+            cursor="ns-resize"
+            onMouseDown={(e) => handleBoundaryMouseDown('top', e)}
+          />
+          <BoundaryHandle
+            x={bbox.x + bbox.width / 2}
+            y={bbox.y + bbox.height}
+            cursor="ns-resize"
+            onMouseDown={(e) => handleBoundaryMouseDown('bottom', e)}
+          />
+          <BoundaryHandle
+            x={bbox.x}
+            y={bbox.y + bbox.height / 2}
+            cursor="ew-resize"
+            onMouseDown={(e) => handleBoundaryMouseDown('left', e)}
+          />
+          <BoundaryHandle
+            x={bbox.x + bbox.width}
+            y={bbox.y + bbox.height / 2}
+            cursor="ew-resize"
+            onMouseDown={(e) => handleBoundaryMouseDown('right', e)}
+          />
+        </g>
+      )}
     </g>
   );
 };
@@ -487,6 +622,37 @@ const PaddingArrow: React.FC<PaddingArrowProps> = ({
   const arrowSize = 8;
   const angle = Math.atan2(y2 - y1, x2 - x1);
 
+  // ✅ Вычисляем длину стрелки
+  const length = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+  const isShort = length < 60;
+
+  // ✅ Умное позиционирование текста
+  let textX = midX;
+  let textY = midY - 5;
+  let textRotation = 0;
+  let showLeaderLine = false;
+
+  if (isShort) {
+    // Короткая стрелка - выносим текст перпендикулярно
+    showLeaderLine = true;
+
+    // Вычисляем перпендикулярное направление
+    const perpAngle = angle + Math.PI / 2;
+    const leaderLength = 30;
+
+    textX = midX + Math.cos(perpAngle) * leaderLength;
+    textY = midY + Math.sin(perpAngle) * leaderLength;
+
+    // Поворачиваем текст для читаемости
+    textRotation = (angle * 180 / Math.PI);
+    if (textRotation > 90) textRotation -= 180;
+    if (textRotation < -90) textRotation += 180;
+  } else {
+    // Длинная стрелка - текст вдоль стрелки
+    textX = midX + 15;
+    textY = midY - 5;
+  }
+
   return (
     <g
       onMouseEnter={() => setIsHovered(true)}
@@ -494,6 +660,7 @@ const PaddingArrow: React.FC<PaddingArrowProps> = ({
       onMouseDown={onMouseDown}
       style={{ cursor: isFocusMode ? 'not-allowed' : 'pointer', pointerEvents: 'all' }}
     >
+      {/* Прозрачная область для клика */}
       <line
         x1={x1}
         y1={y1}
@@ -503,6 +670,7 @@ const PaddingArrow: React.FC<PaddingArrowProps> = ({
         strokeWidth={20}
       />
 
+      {/* Видимая линия */}
       <line
         x1={x1}
         y1={y1}
@@ -512,6 +680,7 @@ const PaddingArrow: React.FC<PaddingArrowProps> = ({
         strokeWidth={isHovered ? 3 : 2}
       />
 
+      {/* Стрелки на концах */}
       <polygon
         points={`${x1},${y1} ${x1 + arrowSize * Math.cos(angle + Math.PI / 6)},${y1 + arrowSize * Math.sin(angle + Math.PI / 6)} ${x1 + arrowSize * Math.cos(angle - Math.PI / 6)},${y1 + arrowSize * Math.sin(angle - Math.PI / 6)}`}
         fill={color}
@@ -522,17 +691,50 @@ const PaddingArrow: React.FC<PaddingArrowProps> = ({
         fill={color}
       />
 
+      {/* ✅ Выносная линия для коротких стрелок */}
+      {showLeaderLine && (
+        <line
+          x1={midX}
+          y1={midY}
+          x2={textX}
+          y2={textY}
+          stroke={color}
+          strokeWidth={1}
+          strokeDasharray="2,2"
+          opacity={0.6}
+        />
+      )}
+
+      {/* Подпись с умным позиционированием */}
       <text
-        x={midX + 15}
-        y={midY - 5}
+        x={textX}
+        y={textY}
         fill={color}
         fontSize={12}
         fontWeight="bold"
+        textAnchor="middle"
+        transform={isShort ? `rotate(${textRotation} ${textX} ${textY})` : undefined}
         style={{ pointerEvents: 'none', userSelect: 'none' }}
       >
         {label}: {value}
       </text>
 
+      {/* Фон для текста (улучшает читаемость) */}
+      {isShort && (
+        <rect
+          x={textX - 40}
+          y={textY - 12}
+          width={80}
+          height={18}
+          fill="white"
+          opacity={0.8}
+          rx={3}
+          style={{ pointerEvents: 'none' }}
+          transform={`rotate(${textRotation} ${textX} ${textY})`}
+        />
+      )}
+
+      {/* Индикатор hover */}
       {isHovered && !isFocusMode && (
         <circle
           cx={midX}
@@ -556,3 +758,48 @@ function parseLocationValue(value: any): number {
   }
   return 0;
 }
+
+// ✅ NEW: Компонент ручки для изменения границы
+interface BoundaryHandleProps {
+  x: number;
+  y: number;
+  cursor: string;
+  onMouseDown: (e: React.MouseEvent) => void;
+}
+
+const BoundaryHandle: React.FC<BoundaryHandleProps> = ({ x, y, cursor, onMouseDown }) => {
+  const [isHovered, setIsHovered] = useState(false);
+
+  return (
+    <g
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+      onMouseDown={onMouseDown}
+      style={{ cursor, pointerEvents: 'all' }}
+    >
+      {/* Прозрачная область для клика */}
+      <circle
+        cx={x}
+        cy={y}
+        r={12}
+        fill="transparent"
+      />
+      {/* Видимая ручка */}
+      <circle
+        cx={x}
+        cy={y}
+        r={isHovered ? 6 : 5}
+        fill="white"
+        stroke="black"
+        strokeWidth={2}
+      />
+      {/* Внутренняя точка */}
+      <circle
+        cx={x}
+        cy={y}
+        r={2}
+        fill="black"
+      />
+    </g>
+  );
+};
