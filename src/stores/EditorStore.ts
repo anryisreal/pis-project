@@ -73,27 +73,16 @@ export class EditorStore {
       const pattern = this.grammarStore.findPatternByName(id);
 
       if (pattern) {
-        const canHaveInnerOuter = pattern.kind !== 'cell';
-
-        // ✅ Проверяем наличие inner/outer, включая pattern_definition
-        const hasInner = pattern.inner && Object.keys(pattern.inner).length > 0 &&
-          Object.values(pattern.inner).some((inner: any) =>
-            inner.pattern || inner.pattern_definition?.item_pattern
-          );
-
-        const hasOuter = pattern.outer && Object.keys(pattern.outer).length > 0 &&
-          Object.values(pattern.outer).some((outer: any) =>
-            outer.pattern || outer.pattern_definition?.item_pattern
-          );
-
-        if (canHaveInnerOuter && (hasInner || hasOuter)) {
-          this.state.isFocusMode = true;
-        } else {
-          this.state.isFocusMode = false;
-        }
+        // ✅ ВСЕ паттерны редактируем на отдельном холсте
+        this.state.isFocusMode = true;
+        // При входе в фокус — сбрасываем внутреннюю активность
+        this.state.activeInnerElement = null;
+        this.state.hoveredInnerOuterElement = null;
       }
     }
   }
+
+
 
   deselectElement(id: string) {
     this.state.selectedElements = this.state.selectedElements.filter(
@@ -172,5 +161,14 @@ export class EditorStore {
     if (typeof window !== 'undefined') {
       window.removeEventListener('keydown', this.handleKeyDown);
     }
+  }
+
+  /**
+   * Переименовать id выбранного элемента (для синхронизации с переименованием паттерна)
+   */
+  renameElementId(oldId: string, newId: string) {
+    this.state.selectedElements = this.state.selectedElements.map((id) =>
+      id === oldId ? newId : id
+    );
   }
 }

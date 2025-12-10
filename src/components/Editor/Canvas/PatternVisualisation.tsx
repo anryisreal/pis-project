@@ -11,55 +11,312 @@ interface PatternVisualizationProps {
   isSelected: boolean;
   isFocusMode: boolean;
   hoveredInnerOuterElement: string | null;
-  onUpdateLocation: (type: 'inner' | 'outer', key: string, location: LocationObject) => void;
-  allElements?: Array<{ id: string; name: string; x: number; y: number; width: number; height: number }>;
+  onUpdateLocation: (
+    type: 'inner' | 'outer',
+    key: string,
+    location: LocationObject
+  ) => void;
+  allElements?: Array<{
+    id: string;
+    name: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }>;
   fixedBoundingBox?: { x: number; y: number; width: number; height: number };
-  onUpdateBoundingBox?: (bbox: { x: number; y: number; width: number; height: number }) => void; // ✅ NEW
+  onUpdateBoundingBox?: (bbox: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }) => void;
+
+  arrayItemPattern?: Pattern | null;
 }
+
+
+
+
 
 const CELL_SIZE = 20;
 
+// 🔹 Статический размер визуального item_pattern внутри массива
+const ARRAY_ITEM_WIDTH = 300;
+const ARRAY_ITEM_HEIGHT = 200;
+
+// 🔹 Фиксированный визуальный gap под стрелку (когда logical gap > 0)
+const ARRAY_VISUAL_GAP_PX = 100;
+
+const getColorByKind = (kind?: string) => {
+  const colors: Record<string, string> = {
+    cell: '#3b82f6',
+    area: '#10b981',
+    array: '#f59e0b'
+  };
+  return (kind && colors[kind]) || '#6b7280';
+};
+
+type ArrayItemRect = { x: number; y: number; width: number; height: number };
+
+
+/**
+ * Раскладка элементов массива относительно (baseX, baseY)
+ * Здесь НЕТ центрирования по bbox – просто считаем минимальный прямоугольник,
+ * в который всё поместится. Для row/column элементы плотно от края, для fill
+ * считаем геометрию как по макетам.
+ */
+function layoutArrayItemsRaw(
+  baseX: number,
+  baseY: number,
+  itemW: number,
+  itemH: number,
+  direction: 'row' | 'column' | 'fill',
+  count: number,
+  visualGap: number
+): ArrayItemRect[] {
+  const rects: ArrayItemRect[] = [];
+
+  if (count <= 0) return rects;
+
+  if (direction === 'row') {
+    for (let i = 0; i < count; i++) {
+      rects.push({
+        x: baseX + i * (itemW + visualGap),
+        y: baseY,
+        width: itemW,
+        height: itemH
+      });
+    }
+    return rects;
+  }
+
+  if (direction === 'column') {
+    for (let i = 0; i < count; i++) {
+      rects.push({
+        x: baseX,
+        y: baseY + i * (itemH + visualGap),
+        width: itemW,
+        height: itemH
+      });
+    }
+    return rects;
+  }
+
+  // direction === 'fill'
+  if (count === 1) {
+    rects.push({
+      x: baseX,
+      y: baseY,
+      width: itemW,
+      height: itemH
+    });
+    return rects;
+  }
+
+  if (count === 2) {
+    // ориентируемся по форме элемента: шире → row, выше → column
+    if (itemW >= itemH) {
+      // row
+      rects.push({
+        x: baseX,
+        y: baseY,
+        width: itemW,
+        height: itemH
+      });
+      rects.push({
+        x: baseX + itemW + visualGap,
+        y: baseY,
+        width: itemW,
+        height: itemH
+      });
+    } else {
+      // column
+      rects.push({
+        x: baseX,
+        y: baseY,
+        width: itemW,
+        height: itemH
+      });
+      rects.push({
+        x: baseX,
+        y: baseY + itemH + visualGap,
+        width: itemW,
+        height: itemH
+      });
+    }
+    return rects;
+  }
+
+  // count >= 3 → «пирамидка»: один сверху по центру, два снизу
+  const totalWidth = itemW * 2 + visualGap;
+  // верхний по центру
+  rects.push({
+    x: baseX + (totalWidth - itemW) / 2,
+    y: baseY,
+    width: itemW,
+    height: itemH
+  });
+
+  const bottomY = baseY + itemH + visualGap;
+
+  rects.push({
+    x: baseX,
+    y: bottomY,
+    width: itemW,
+    height: itemH
+  });
+
+  rects.push({
+    x: baseX + itemW + visualGap,
+    y: bottomY,
+    width: itemW,
+    height: itemH
+  });
+
+  return rects;
+}
+
+
+// Сколько элементов массива рисуем (1..3)
+function getArrayItemsToDraw(raw: any): number {
+  if (raw == null) return 3;
+
+  if (typeof raw === 'number') {
+    if (raw <= 1) return 1;
+    if (raw === 2) return 2;
+    return 3;
+  }
+
+  if (typeof raw === 'string') {
+    const value = raw.trim();
+    if (!value) return 3;
+
+    if (/^\d+$/.test(value)) {
+      const n = parseInt(value, 10);
+      if (n <= 1) return 1;
+      if (n === 2) return 2;
+      return 3;
+    }
+
+    const rangeMatch = value.match(/^(\d+)\.\.(\d+|\*)$/);
+    if (rangeMatch) {
+      const upperStr = rangeMatch[2];
+      if (upperStr === '*' || upperStr === '') return 3;
+      const upper = parseInt(upperStr, 10);
+      if (upper <= 1) return 1;
+      if (upper === 2) return 2;
+      return 3;
+    }
+
+    const plusMatch = value.match(/^(\d+)\+$/);
+    if (plusMatch) return 3;
+  }
+
+  return 3;
+}
+
+
+
 export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
-                                                                            pattern,
-                                                                            x,
-                                                                            y,
-                                                                            width,
-                                                                            height,
-                                                                            isSelected,
-                                                                            isFocusMode,
-                                                                            hoveredInnerOuterElement,
-                                                                            onUpdateLocation,
-                                                                            allElements = [],
-                                                                            fixedBoundingBox,
-                                                                            onUpdateBoundingBox
-                                                                          }) => {
+  pattern,
+  x,
+  y,
+  width,
+  height,
+  isSelected,
+  isFocusMode,
+  hoveredInnerOuterElement,
+  onUpdateLocation,
+  allElements = [],
+  fixedBoundingBox,
+  onUpdateBoundingBox,
+  arrayItemPattern,
+}) => {
   const [draggingHandle, setDraggingHandle] = useState<{
     type: 'inner' | 'outer';
     key: string;
     side: 'top' | 'right' | 'bottom' | 'left';
-    startValue: number;
+    startValue: string;
   } | null>(null);
 
-  const findElement = (name: string) => {
-    return allElements.find(el => el.name === name);
+  const [hoveredArrayItem, setHoveredArrayItem] = useState<number | null>(null);
+
+
+  const handleArrayItemMouseEnter =
+  (index: number) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setHoveredArrayItem(index);
   };
 
-  const calculateBoundingBox = () => {
-    // Если есть фиксированная граница - используем её
+  const handleArrayItemMouseLeave = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setHoveredArrayItem(null);
+  };
+
+
+
+  const findElementByComponentKey = (key: string) => {
+    return allElements.find((el) => el.name === key);
+  };
+
+
+
+    const calculateBoundingBox = () => {
+    // 🔹 Спец-случай: Array — размер зависит только от статических размеров item + count + gap
+    if (pattern.kind === 'array' && pattern.item_pattern) {
+      const direction = (pattern as any).direction || 'row';
+      const count = getArrayItemsToDraw((pattern as any).item_count);
+      const logicalGap = pattern.gap
+      const visualGap = logicalGap != "0" ? ARRAY_VISUAL_GAP_PX : 0;
+
+      // Раскладываем элементы от (x, y) с фиксированным размером item'а
+      const rects = layoutArrayItemsRaw(
+        x,
+        y,
+        ARRAY_ITEM_WIDTH,
+        ARRAY_ITEM_HEIGHT,
+        direction as 'row' | 'column' | 'fill',
+        count,
+        visualGap
+      );
+
+      if (rects.length > 0) {
+        let minX = rects[0].x;
+        let minY = rects[0].y;
+        let maxX = rects[0].x + rects[0].width;
+        let maxY = rects[0].y + rects[0].height;
+
+        for (const r of rects) {
+          minX = Math.min(minX, r.x);
+          minY = Math.min(minY, r.y);
+          maxX = Math.max(maxX, r.x + r.width);
+          maxY = Math.max(maxY, r.y + r.height);
+        }
+
+        return {
+          x: minX,
+          y: minY,
+          width: maxX - minX,
+          height: maxY - minY
+        };
+      }
+    }
+
+    // 🔹 Остальные паттерны — как раньше
     if (fixedBoundingBox) {
       return fixedBoundingBox;
     }
 
-    // Иначе вычисляем динамически
     let minX = x;
     let minY = y;
     let maxX = x + width;
     let maxY = y + height;
 
     if (pattern.inner) {
-      Object.values(pattern.inner).forEach(innerPattern => {
+      Object.values(pattern.inner).forEach((innerPattern) => {
         if (!innerPattern.pattern) return;
-        const innerElement = findElement(innerPattern.pattern);
+        const innerElement = findElementByComponentKey(innerPattern.pattern);
         if (!innerElement) return;
 
         minX = Math.min(minX, innerElement.x);
@@ -77,23 +334,29 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
     };
   };
 
-  const handleMouseDown = (
-    type: 'inner' | 'outer',
-    key: string,
-    side: 'top' | 'right' | 'bottom' | 'left',
-    currentValue: number
-  ) => (e: React.MouseEvent) => {
-    // В режиме фокуса граница зафиксирована
-    if (isFocusMode) {
+
+
+
+
+  const handleMouseDown =
+    (
+      type: 'inner' | 'outer',
+      key: string,
+      side: 'top' | 'right' | 'bottom' | 'left',
+      currentValue: string
+    ) =>
+    (e: React.MouseEvent) => {
+      // В режиме фокуса граница зафиксирована
+      if (isFocusMode) {
+        e.stopPropagation();
+        e.preventDefault();
+        return;
+      }
+
       e.stopPropagation();
       e.preventDefault();
-      return;
-    }
-
-    e.stopPropagation();
-    e.preventDefault();
-    setDraggingHandle({ type, key, side, startValue: currentValue });
-  };
+      setDraggingHandle({ type, key, side, startValue: currentValue });
+    };
 
   const handleMouseMove = (e: React.MouseEvent<SVGGElement>) => {
     // Обработка изменения padding/margin стрелок
@@ -125,15 +388,17 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
       newValue = Math.max(0, delta);
     }
 
-    const locationKey = type === 'inner' ? `padding-${side}` : `margin-${side}`;
+    const locationKey =
+      type === 'inner' ? `padding-${side}` : `margin-${side}`;
 
-    const currentPattern = type === 'inner'
-      ? pattern.inner?.[key]
-      : pattern.outer?.[key];
+    const currentPattern =
+      type === 'inner' ? pattern.inner?.[key] : pattern.outer?.[key];
 
-    const currentLocation = (typeof currentPattern?.location === 'object' && !Array.isArray(currentPattern.location))
-      ? currentPattern.location as LocationObject
-      : {} as LocationObject;
+    const currentLocation =
+      typeof currentPattern?.location === 'object' &&
+      !Array.isArray(currentPattern.location)
+        ? (currentPattern.location as LocationObject)
+        : ({} as LocationObject);
 
     const newLocation: LocationObject = {
       ...currentLocation,
@@ -147,9 +412,17 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
     setDraggingHandle(null);
   };
 
-  // ✅ NEW: Обработчики для изменения границы
+  // Обработчики для изменения границы
   const handleBoundaryMouseDown = (
-    side: 'top' | 'right' | 'bottom' | 'left' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right',
+    side:
+      | 'top'
+      | 'right'
+      | 'bottom'
+      | 'left'
+      | 'top-left'
+      | 'top-right'
+      | 'bottom-left'
+      | 'bottom-right',
     e: React.MouseEvent
   ) => {
     if (!isFocusMode || !onUpdateBoundingBox || !fixedBoundingBox) return;
@@ -165,13 +438,18 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
     pt.y = e.clientY;
     const svgP = pt.matrixTransform(svg.getScreenCTM()?.inverse());
 
-    // ✅ Вычисляем минимальный bbox, охватывающий все inner элементы
-    let minBbox = { x: Infinity, y: Infinity, maxX: -Infinity, maxY: -Infinity };
+    // Вычисляем минимальный bbox, охватывающий все inner элементы
+    let minBbox = {
+      x: Infinity,
+      y: Infinity,
+      maxX: -Infinity,
+      maxY: -Infinity
+    };
 
     if (pattern.inner) {
-      Object.values(pattern.inner).forEach(innerPattern => {
+      Object.values(pattern.inner).forEach((innerPattern) => {
         if (!innerPattern.pattern) return;
-        const innerElement = findElement(innerPattern.pattern);
+        const innerElement = findElementByComponentKey(innerPattern.pattern);
         if (!innerElement) return;
 
         minBbox.x = Math.min(minBbox.x, innerElement.x);
@@ -187,7 +465,6 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
     const startBbox = { ...fixedBoundingBox };
     const startMouse = { x: svgP.x, y: svgP.y };
 
-    // ✅ ИСПРАВЛЕНИЕ: Используем глобальные слушатели для надёжности
     const handleGlobalMouseMove = (globalE: MouseEvent) => {
       globalE.preventDefault();
 
@@ -220,28 +497,23 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
         newBbox.width = startBbox.width + deltaX;
       }
 
-      // ✅ ИСПРАВЛЕНИЕ: Ограничиваем минимальным размером, охватывающим inner элементы
+      // Ограничиваем минимальным размером, охватывающим inner элементы
       if (hasInnerElements) {
-        // Проверяем, что новый bbox охватывает все inner элементы
         if (side.includes('left')) {
-          // При изменении слева - не можем уйти правее левого края inner элементов
           newBbox.x = Math.min(newBbox.x, minBbox.x);
           newBbox.width = startBbox.x + startBbox.width - newBbox.x;
         }
         if (side.includes('right')) {
-          // При изменении справа - не можем уйти левее правого края inner элементов
           const rightEdge = newBbox.x + newBbox.width;
           if (rightEdge < minBbox.maxX) {
             newBbox.width = minBbox.maxX - newBbox.x;
           }
         }
         if (side.includes('top')) {
-          // При изменении сверху - не можем уйти ниже верхнего края inner элементов
           newBbox.y = Math.min(newBbox.y, minBbox.y);
           newBbox.height = startBbox.y + startBbox.height - newBbox.y;
         }
         if (side.includes('bottom')) {
-          // При изменении снизу - не можем уйти выше нижнего края inner элементов
           const bottomEdge = newBbox.y + newBbox.height;
           if (bottomEdge < minBbox.maxY) {
             newBbox.height = minBbox.maxY - newBbox.y;
@@ -284,26 +556,28 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
 
   // INNER элементы (padding)
   if (pattern.inner) {
-    Object.entries(pattern.inner).forEach(([key, innerPattern]) => {
-      if (!innerPattern.pattern) return;
+  Object.entries(pattern.inner).forEach(([key, innerPattern]) => {
+    if (!innerPattern.pattern) return;
 
-      const innerElement = findElement(innerPattern.pattern);
-      if (!innerElement) return;
+    const innerElement = findElementByComponentKey(key);
+    if (!innerElement) return;
 
-      // Показываем стрелки ТОЛЬКО если этот элемент наведён
-      const isHovered = hoveredInnerOuterElement === innerPattern.pattern;
-      if (!isHovered) return;
+    // показываем стрелки только если навели именно на ЭТОТ компонент
+    const isHovered = hoveredInnerOuterElement === key;
+    if (!isHovered) return;
 
-      const location = (typeof innerPattern.location === 'object' && !Array.isArray(innerPattern.location))
-        ? innerPattern.location as LocationObject
-        : {} as LocationObject;
+    const location =
+      typeof innerPattern.location === 'object' &&
+      !Array.isArray(innerPattern.location)
+        ? (innerPattern.location as LocationObject)
+        : ({} as LocationObject);
 
-      const paddingTop = parseLocationValue(location['padding-top']);
-      const paddingRight = parseLocationValue(location['padding-right']);
-      const paddingBottom = parseLocationValue(location['padding-bottom']);
-      const paddingLeft = parseLocationValue(location['padding-left']);
+      const paddingTop = location['padding-top'] ?? "0";
+      const paddingRight = location['padding-right'] ?? "0";
+      const paddingBottom = location['padding-bottom'] ?? "0";
+      const paddingLeft = location['padding-left'] ?? "0";
 
-      if (paddingTop > 0) {
+      if (paddingTop != "0") {
         const lineX = innerElement.x + innerElement.width / 2;
         innerVisualizations.push(
           <PaddingArrow
@@ -321,7 +595,7 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
         );
       }
 
-      if (paddingBottom > 0) {
+      if (paddingBottom != "0") {
         const lineX = innerElement.x + innerElement.width / 2;
         innerVisualizations.push(
           <PaddingArrow
@@ -339,7 +613,7 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
         );
       }
 
-      if (paddingLeft > 0) {
+      if (paddingLeft != "0") {
         const lineY = innerElement.y + innerElement.height / 2;
         innerVisualizations.push(
           <PaddingArrow
@@ -357,7 +631,7 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
         );
       }
 
-      if (paddingRight > 0) {
+      if (paddingRight != "0") {
         const lineY = innerElement.y + innerElement.height / 2;
         innerVisualizations.push(
           <PaddingArrow
@@ -377,29 +651,33 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
     });
   }
 
-  // OUTER элементы (margin)
+    // OUTER элементы (margin)
   if (pattern.outer) {
     Object.entries(pattern.outer).forEach(([key, outerPattern]) => {
       if (!outerPattern.pattern) return;
 
-      const outerElement = findElement(outerPattern.pattern);
+      const outerElement = findElementByComponentKey(key);
       if (!outerElement) return;
 
-      // Показываем стрелки ТОЛЬКО если этот элемент наведён
-      const isHovered = hoveredInnerOuterElement === outerPattern.pattern;
+      const isHovered = hoveredInnerOuterElement === key;
       if (!isHovered) return;
 
-      const location = (typeof outerPattern.location === 'object' && !Array.isArray(outerPattern.location))
-        ? outerPattern.location as LocationObject
-        : {} as LocationObject;
+      const location =
+        typeof outerPattern.location === 'object' &&
+        !Array.isArray(outerPattern.location)
+          ? (outerPattern.location as LocationObject)
+          : ({} as LocationObject);
 
-      const marginTop = parseLocationValue(location['margin-top']);
-      const marginRight = parseLocationValue(location['margin-right']);
-      const marginBottom = parseLocationValue(location['margin-bottom']);
-      const marginLeft = parseLocationValue(location['margin-left']);
+      const marginTop = location['margin-top'] ?? '0';
+      const marginRight = location['margin-right'] ?? '0';
+      const marginBottom = location['margin-bottom'] ?? '0';
+      const marginLeft = location['margin-left'] ?? '0';
 
-      if (marginTop > 0) {
+      // --- margin-top ---
+      if (marginTop !== '0') {
+        const outerBottomY = outerElement.y + outerElement.height;
         const outerCenterX = outerElement.x + outerElement.width / 2;
+
         let lineX = outerCenterX;
         if (outerCenterX < bbox.x) {
           lineX = bbox.x;
@@ -407,11 +685,32 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
           lineX = bbox.x + bbox.width;
         }
 
+        const isDiagonal = lineX !== outerCenterX;
+
+        // Пунктир от компонента до проекции по X
+        if (isDiagonal) {
+          outerVisualizations.push(
+            <line
+              key={`outer-top-guide-${key}`}
+              x1={outerCenterX}
+              y1={outerBottomY}
+              x2={lineX}
+              y2={outerBottomY}
+              stroke="rgb(255, 105, 180)"
+              strokeWidth={1}
+              strokeDasharray="4,2"
+              opacity={0.7}
+              style={{ pointerEvents: 'none' }}
+            />
+          );
+        }
+
+        // Стрелка строго вертикально
         outerVisualizations.push(
           <PaddingArrow
             key={`outer-top-${key}`}
-            x1={outerCenterX}
-            y1={outerElement.y + outerElement.height}
+            x1={lineX}
+            y1={outerBottomY}
             x2={lineX}
             y2={bbox.y}
             value={marginTop}
@@ -423,8 +722,11 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
         );
       }
 
-      if (marginBottom > 0) {
+      // --- margin-bottom ---
+      if (marginBottom !== '0') {
+        const outerTopY = outerElement.y;
         const outerCenterX = outerElement.x + outerElement.width / 2;
+
         let lineX = outerCenterX;
         if (outerCenterX < bbox.x) {
           lineX = bbox.x;
@@ -432,13 +734,32 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
           lineX = bbox.x + bbox.width;
         }
 
+        const isDiagonal = lineX !== outerCenterX;
+
+        if (isDiagonal) {
+          outerVisualizations.push(
+            <line
+              key={`outer-bottom-guide-${key}`}
+              x1={outerCenterX}
+              y1={outerTopY}
+              x2={lineX}
+              y2={outerTopY}
+              stroke="rgb(255, 105, 180)"
+              strokeWidth={1}
+              strokeDasharray="4,2"
+              opacity={0.7}
+              style={{ pointerEvents: 'none' }}
+            />
+          );
+        }
+
         outerVisualizations.push(
           <PaddingArrow
             key={`outer-bottom-${key}`}
             x1={lineX}
             y1={bbox.y + bbox.height}
-            x2={outerCenterX}
-            y2={outerElement.y}
+            x2={lineX}
+            y2={outerTopY}
             value={marginBottom}
             label="margin-bottom"
             color="rgb(255, 105, 180)"
@@ -448,8 +769,11 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
         );
       }
 
-      if (marginLeft > 0) {
+      // --- margin-left ---
+      if (marginLeft !== '0') {
+        const outerRightX = outerElement.x + outerElement.width;
         const outerCenterY = outerElement.y + outerElement.height / 2;
+
         let lineY = outerCenterY;
         if (outerCenterY < bbox.y) {
           lineY = bbox.y;
@@ -457,11 +781,30 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
           lineY = bbox.y + bbox.height;
         }
 
+        const isDiagonal = lineY !== outerCenterY;
+
+        if (isDiagonal) {
+          outerVisualizations.push(
+            <line
+              key={`outer-left-guide-${key}`}
+              x1={outerRightX}
+              y1={outerCenterY}
+              x2={outerRightX}
+              y2={lineY}
+              stroke="rgb(255, 105, 180)"
+              strokeWidth={1}
+              strokeDasharray="4,2"
+              opacity={0.7}
+              style={{ pointerEvents: 'none' }}
+            />
+          );
+        }
+
         outerVisualizations.push(
           <PaddingArrow
             key={`outer-left-${key}`}
-            x1={outerElement.x + outerElement.width}
-            y1={outerCenterY}
+            x1={outerRightX}
+            y1={lineY}
             x2={bbox.x}
             y2={lineY}
             value={marginLeft}
@@ -473,8 +816,11 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
         );
       }
 
-      if (marginRight > 0) {
+      // --- margin-right ---
+      if (marginRight !== '0') {
+        const outerLeftX = outerElement.x;
         const outerCenterY = outerElement.y + outerElement.height / 2;
+
         let lineY = outerCenterY;
         if (outerCenterY < bbox.y) {
           lineY = bbox.y;
@@ -482,13 +828,32 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
           lineY = bbox.y + bbox.height;
         }
 
+        const isDiagonal = lineY !== outerCenterY;
+
+        if (isDiagonal) {
+          outerVisualizations.push(
+            <line
+              key={`outer-right-guide-${key}`}
+              x1={outerLeftX}
+              y1={outerCenterY}
+              x2={outerLeftX}
+              y2={lineY}
+              stroke="rgb(255, 105, 180)"
+              strokeWidth={1}
+              strokeDasharray="4,2"
+              opacity={0.7}
+              style={{ pointerEvents: 'none' }}
+            />
+          );
+        }
+
         outerVisualizations.push(
           <PaddingArrow
             key={`outer-right-${key}`}
             x1={bbox.x + bbox.width}
             y1={lineY}
-            x2={outerElement.x}
-            y2={outerCenterY}
+            x2={outerLeftX}
+            y2={lineY}
             value={marginRight}
             label="margin-right"
             color="rgb(255, 105, 180)"
@@ -500,6 +865,404 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
     });
   }
 
+
+    // Визуализация Array паттерна (item_pattern + item_count + gap)
+  const arrayVisualizations: JSX.Element[] = [];
+
+  if (pattern.kind === 'array' && pattern.item_pattern && isFocusMode) {
+    const direction = (pattern as any).direction || 'row';
+    const logicalGap = pattern.gap;
+    const visualGap = logicalGap != '0' ? ARRAY_VISUAL_GAP_PX : 0;
+    const count = getArrayItemsToDraw((pattern as any).item_count);
+
+    // 🔹 Статический размер item'а
+    const itemW = ARRAY_ITEM_WIDTH;
+    const itemH = ARRAY_ITEM_HEIGHT;
+
+    const itemRects: ArrayItemRect[] = layoutArrayItemsRaw(
+      bbox.x,
+      bbox.y,
+      itemW,
+      itemH,
+      direction as 'row' | 'column' | 'fill',
+      count,
+      visualGap
+    );
+
+    if (itemRects.length > 0) {
+      // 🔹 Реальный паттерн элемента массива
+      const itemKind = arrayItemPattern?.kind;
+      const itemName = pattern.item_pattern || 'item-pattern';
+
+      const baseColor = getColorByKind(itemKind);
+      const fillColor = baseColor + '66'; // как у невыбранного элемента
+      const strokeColor = baseColor;
+      const kindLabel = itemKind || 'item';
+
+      itemRects.forEach((rect, index) => {
+        arrayVisualizations.push(
+          <g
+            key={`array-item-${index}`}
+            onMouseEnter={handleArrayItemMouseEnter(index)}
+            onMouseLeave={handleArrayItemMouseLeave}
+            style={{ pointerEvents: 'auto' }}
+          >
+            {/* Основной прямоугольник, как в ElementShape */}
+            <rect
+              x={rect.x}
+              y={rect.y}
+              width={rect.width}
+              height={rect.height}
+              rx={6}
+              fill={fillColor}
+              stroke={strokeColor}
+              strokeWidth={2}
+            />
+
+            {/* Название элемента слева */}
+            <text
+              x={rect.x + 10}
+              y={rect.y + 24}
+              fontSize={14}
+              fontWeight="bold"
+              fill="#1f2937"
+              pointerEvents="none"
+            >
+              {itemName}
+            </text>
+
+            {/* Бейдж типа справа сверху */}
+            <rect
+              x={rect.x + rect.width - 50}
+              y={rect.y + 5}
+              width={45}
+              height={20}
+              fill="white"
+              rx={4}
+              opacity={0.9}
+              pointerEvents="none"
+            />
+            <text
+              x={rect.x + rect.width - 48}
+              y={rect.y + 18}
+              fontSize={10}
+              fill="#6b7280"
+              pointerEvents="none"
+            >
+              {kindLabel}
+            </text>
+          </g>
+        );
+      });
+
+      // ───────────── стрелки gap по hover ─────────────
+      if (
+        hoveredArrayItem !== null &&
+        logicalGap != "0" &&
+        itemRects.length > 1 &&
+        hoveredArrayItem >= 0 &&
+        hoveredArrayItem < itemRects.length
+      ) {
+        const from = itemRects[hoveredArrayItem];
+
+        const isFillPyramid =
+          direction === 'fill' && itemRects.length === 3;
+
+        let neighbors: number[] = [];
+
+        if (isFillPyramid && logicalGap != "0" && itemRects.length === 3) {
+          // Спец-кейс: fill + 3 + gap -> соединяем "все со всеми, кроме себя"
+          neighbors = [0, 1, 2].filter((i) => i !== hoveredArrayItem);
+        } else {
+          // Общий случай как раньше — только соседние по индексу
+          if (hoveredArrayItem - 1 >= 0) neighbors.push(hoveredArrayItem - 1);
+          if (hoveredArrayItem + 1 < itemRects.length)
+            neighbors.push(hoveredArrayItem + 1);
+        }
+
+        neighbors.forEach((idx) => {
+        const to = itemRects[idx];
+
+        const arrowSize = 6;
+
+        const makeArrowHead = (
+          tipX: number,
+          tipY: number,
+          dx: number,
+          dy: number
+        ) => {
+          const len = Math.sqrt(dx * dx + dy * dy) || 1;
+          const ux = dx / len;
+          const uy = dy / len;
+
+          const perpX = -uy;
+          const perpY = ux;
+
+          const baseX = tipX - ux * arrowSize;
+          const baseY = tipY - uy * arrowSize;
+
+          const leftX = baseX + perpX * (arrowSize / 2);
+          const leftY = baseY + perpY * (arrowSize / 2);
+          const rightX = baseX - perpX * (arrowSize / 2);
+          const rightY = baseY - perpY * (arrowSize / 2);
+
+          return `${tipX},${tipY} ${leftX},${leftY} ${rightX},${rightY}`;
+        };
+
+        // ─────────────────────
+        // Спец-кейс: fill + 3 (пирамидка)
+        // ─────────────────────
+        if (isFillPyramid) {
+          // Определяем, в одном ли ряду прямоугольники
+          const sameRow = Math.abs(from.y - to.y) < 1;
+
+          if (sameRow) {
+            // Нижний ряд: чисто горизонтальная стрелка между левым и правым
+            const left = from.x <= to.x ? from : to;
+            const right = from.x <= to.x ? to : from;
+
+            const startX = left.x + left.width;
+            const startY = left.y + left.height / 2;
+            const endX = right.x;
+            const endY = right.y + right.height / 2;
+
+            const dx = endX - startX;
+            const dy = endY - startY;
+
+            const midX = (startX + endX) / 2;
+            const midY = (startY + endY) / 2;
+
+            arrayVisualizations.push(
+              <g
+                key={`array-gap-arrow-${hoveredArrayItem}-${idx}`}
+                style={{ pointerEvents: 'none' }}
+              >
+                {/* основная горизонтальная линия */}
+                <line
+                  x1={startX}
+                  y1={startY}
+                  x2={endX}
+                  y2={endY}
+                  stroke="#4b5563"
+                  strokeWidth={1.5}
+                />
+                {/* стрелка к соседу */}
+                <polygon
+                  points={makeArrowHead(endX, endY, dx, dy)}
+                  fill="#4b5563"
+                />
+                {/* стрелка обратно к текущему */}
+                <polygon
+                  points={makeArrowHead(startX, startY, -dx, -dy)}
+                  fill="#4b5563"
+                />
+                <text
+                  x={midX}
+                  y={midY - 6}
+                  fontSize={11}
+                  fill="#4b5563"
+                  textAnchor="middle"
+                >
+                  gap: {logicalGap}
+                </text>
+              </g>
+            );
+
+            return;
+          }
+
+          // Разные ряды: верхний и нижний элемент.
+          const upper = from.y < to.y ? from : to;
+          const lower = from.y < to.y ? to : from;
+
+          // Берём точки на нижней границе верхнего и верхней границе нижнего (по центру)
+          const upperEdgeX = upper.x + upper.width / 2;
+          const upperEdgeY = upper.y + upper.height;
+          const lowerEdgeX = lower.x + lower.width / 2;
+          const lowerEdgeY = lower.y;
+
+          // Общая вертикаль, к которой выходим — середина между проекциями
+          const midX = (upperEdgeX + lowerEdgeX) / 2;
+
+          const upperProjX = midX;
+          const upperProjY = upperEdgeY;
+          const lowerProjX = midX;
+          const lowerProjY = lowerEdgeY;
+
+          // Пунктир только до перпендикуляра (горизонтальное выравнивание)
+          arrayVisualizations.push(
+            <g
+              key={`array-gap-arrow-guide-${hoveredArrayItem}-${idx}`}
+              style={{ pointerEvents: 'none' }}
+            >
+              {/* от верхнего элемента до вертикали */}
+              <line
+                x1={upperEdgeX}
+                y1={upperEdgeY}
+                x2={upperProjX}
+                y2={upperProjY}
+                stroke="#4b5563"
+                strokeWidth={1}
+                strokeDasharray="4 2"
+              />
+              {/* от нижнего элемента до вертикали */}
+              <line
+                x1={lowerEdgeX}
+                y1={lowerEdgeY}
+                x2={lowerProjX}
+                y2={lowerProjY}
+                stroke="#4b5563"
+                strokeWidth={1}
+                strokeDasharray="4 2"
+              />
+            </g>
+          );
+
+          // Основная вертикальная линия со стрелками на концах
+          const startX = upperProjX;
+          const startY = upperProjY;
+          const endX = lowerProjX;
+          const endY = lowerProjY;
+
+          const dx = endX - startX;
+          const dy = endY - startY;
+
+          const midLabelX = (startX + endX) / 2;
+          const midLabelY = (startY + endY) / 2;
+
+          arrayVisualizations.push(
+            <g
+              key={`array-gap-arrow-${hoveredArrayItem}-${idx}`}
+              style={{ pointerEvents: 'none' }}
+            >
+              <line
+                x1={startX}
+                y1={startY}
+                x2={endX}
+                y2={endY}
+                stroke="#4b5563"
+                strokeWidth={1.5}
+              />
+              {/* стрелка к нижнему */}
+              <polygon
+                points={makeArrowHead(endX, endY, dx, dy)}
+                fill="#4b5563"
+              />
+              {/* стрелка обратно к верхнему */}
+              <polygon
+                points={makeArrowHead(startX, startY, -dx, -dy)}
+                fill="#4b5563"
+              />
+              <text
+                x={midLabelX}
+                y={midLabelY - 6}
+                fontSize={11}
+                fill="#4b5563"
+                textAnchor="middle"
+              >
+                gap: {logicalGap}
+              </text>
+            </g>
+          );
+
+          return;
+        }
+
+        // ─────────────────────
+        // Общий кейс (row / column / fill != 3) — как раньше
+        // ─────────────────────
+        const fromCx = from.x + from.width / 2;
+        const fromCy = from.y + from.height / 2;
+        const toCx = to.x + to.width / 2;
+        const toCy = to.y + to.height / 2;
+
+        const vertical =
+          Math.abs(toCy - fromCy) > Math.abs(toCx - fromCx);
+
+        let startX: number;
+        let startY: number;
+        let endX: number;
+        let endY: number;
+
+        if (vertical) {
+          if (fromCy <= toCy) {
+            startX = fromCx;
+            startY = from.y + from.height;
+            endX = toCx;
+            endY = to.y;
+          } else {
+            startX = fromCx;
+            startY = from.y;
+            endX = toCx;
+            endY = to.y + to.height;
+          }
+        } else {
+          if (fromCx <= toCx) {
+            startX = from.x + from.width;
+            startY = fromCy;
+            endX = to.x;
+            endY = toCy;
+          } else {
+            startX = from.x;
+            startY = fromCy;
+            endX = to.x + to.width;
+            endY = toCy;
+          }
+        }
+
+        const dx = endX - startX;
+        const dy = endY - startY;
+
+        const midX = (startX + endX) / 2;
+        const midY = (startY + endY) / 2;
+
+        arrayVisualizations.push(
+          <g
+            key={`array-gap-arrow-${hoveredArrayItem}-${idx}`}
+            style={{ pointerEvents: 'none' }}
+          >
+            <line
+              x1={startX}
+              y1={startY}
+              x2={endX}
+              y2={endY}
+              stroke="#4b5563"
+              strokeWidth={1.5}
+            />
+            {/* стрелка к соседу */}
+            <polygon
+              points={makeArrowHead(endX, endY, dx, dy)}
+              fill="#4b5563"
+            />
+            {/* стрелка обратно к текущему */}
+            <polygon
+              points={makeArrowHead(startX, startY, -dx, -dy)}
+              fill="#4b5563"
+            />
+            <text
+              x={midX}
+              y={midY - 6}
+              fontSize={11}
+              fill="#4b5563"
+              textAnchor="middle"
+            >
+              gap: {logicalGap}
+            </text>
+          </g>
+        );
+      });
+
+      }
+    }
+  }
+
+
+
+
+
+
+
+
   return (
     <g
       onMouseMove={handleMouseMove}
@@ -509,7 +1272,7 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
     >
       {outerVisualizations}
 
-      {/* Чёрная граница - ЗАФИКСИРОВАНА в режиме фокуса */}
+      {/* Чёрная граница */}
       <rect
         x={bbox.x}
         y={bbox.y}
@@ -518,29 +1281,16 @@ export const PatternVisualization: React.FC<PatternVisualizationProps> = ({
         fill="transparent"
         stroke="black"
         strokeWidth={isFocusMode ? 4 : 3}
-        strokeDasharray={isFocusMode ? "none" : "5,5"}
+        strokeDasharray={isFocusMode ? 'none' : '5,5'}
         style={{ pointerEvents: 'none' }}
       />
 
-      {/* Подсказка о зафиксированной границе */}
-      {isFocusMode && (
-        <text
-          x={bbox.x + bbox.width / 2}
-          y={bbox.y - 10}
-          fontSize="11"
-          fill="black"
-          fontWeight="bold"
-          textAnchor="middle"
-          style={{ pointerEvents: 'none' }}
-        >
-          Граница зафиксирована (ESC для выхода)
-        </text>
-      )}
-
       {innerVisualizations}
 
-      {/* ✅ Ручки для изменения границы в режиме фокуса */}
-      {isFocusMode && onUpdateBoundingBox && (
+      {arrayVisualizations}
+
+      {/* Ручки для изменения границы в режиме фокуса */}
+      {isFocusMode && onUpdateBoundingBox && pattern.kind !== 'array' && (
         <g>
           {/* Угловые ручки */}
           <BoundaryHandle
@@ -604,7 +1354,7 @@ interface PaddingArrowProps {
   y1: number;
   x2: number;
   y2: number;
-  value: number;
+  value: string;
   label: string;
   color: string;
   onMouseDown: (e: React.MouseEvent) => void;
@@ -612,8 +1362,16 @@ interface PaddingArrowProps {
 }
 
 const PaddingArrow: React.FC<PaddingArrowProps> = ({
-                                                     x1, y1, x2, y2, value, label, color, onMouseDown, isFocusMode
-                                                   }) => {
+  x1,
+  y1,
+  x2,
+  y2,
+  value,
+  label,
+  color,
+  onMouseDown,
+  isFocusMode
+}) => {
   const [isHovered, setIsHovered] = useState(false);
 
   const midX = (x1 + x2) / 2;
@@ -622,33 +1380,27 @@ const PaddingArrow: React.FC<PaddingArrowProps> = ({
   const arrowSize = 8;
   const angle = Math.atan2(y2 - y1, x2 - x1);
 
-  // ✅ Вычисляем длину стрелки
   const length = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
   const isShort = length < 60;
 
-  // ✅ Умное позиционирование текста
   let textX = midX;
   let textY = midY - 5;
   let textRotation = 0;
   let showLeaderLine = false;
 
   if (isShort) {
-    // Короткая стрелка - выносим текст перпендикулярно
     showLeaderLine = true;
 
-    // Вычисляем перпендикулярное направление
     const perpAngle = angle + Math.PI / 2;
     const leaderLength = 30;
 
     textX = midX + Math.cos(perpAngle) * leaderLength;
     textY = midY + Math.sin(perpAngle) * leaderLength;
 
-    // Поворачиваем текст для читаемости
-    textRotation = (angle * 180 / Math.PI);
+    textRotation = (angle * 180) / Math.PI;
     if (textRotation > 90) textRotation -= 180;
     if (textRotation < -90) textRotation += 180;
   } else {
-    // Длинная стрелка - текст вдоль стрелки
     textX = midX + 15;
     textY = midY - 5;
   }
@@ -658,19 +1410,13 @@ const PaddingArrow: React.FC<PaddingArrowProps> = ({
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       onMouseDown={onMouseDown}
-      style={{ cursor: isFocusMode ? 'not-allowed' : 'pointer', pointerEvents: 'all' }}
+      style={{
+        cursor: isFocusMode ? 'not-allowed' : 'pointer',
+        pointerEvents: 'all'
+      }}
     >
-      {/* Прозрачная область для клика */}
-      <line
-        x1={x1}
-        y1={y1}
-        x2={x2}
-        y2={y2}
-        stroke="transparent"
-        strokeWidth={20}
-      />
+      <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="transparent" strokeWidth={20} />
 
-      {/* Видимая линия */}
       <line
         x1={x1}
         y1={y1}
@@ -680,18 +1426,24 @@ const PaddingArrow: React.FC<PaddingArrowProps> = ({
         strokeWidth={isHovered ? 3 : 2}
       />
 
-      {/* Стрелки на концах */}
       <polygon
-        points={`${x1},${y1} ${x1 + arrowSize * Math.cos(angle + Math.PI / 6)},${y1 + arrowSize * Math.sin(angle + Math.PI / 6)} ${x1 + arrowSize * Math.cos(angle - Math.PI / 6)},${y1 + arrowSize * Math.sin(angle - Math.PI / 6)}`}
+        points={`${x1},${y1} ${
+          x1 + arrowSize * Math.cos(angle + Math.PI / 6)
+        },${y1 + arrowSize * Math.sin(angle + Math.PI / 6)} ${
+          x1 + arrowSize * Math.cos(angle - Math.PI / 6)
+        },${y1 + arrowSize * Math.sin(angle - Math.PI / 6)}`}
         fill={color}
       />
 
       <polygon
-        points={`${x2},${y2} ${x2 - arrowSize * Math.cos(angle + Math.PI / 6)},${y2 - arrowSize * Math.sin(angle + Math.PI / 6)} ${x2 - arrowSize * Math.cos(angle - Math.PI / 6)},${y2 - arrowSize * Math.sin(angle - Math.PI / 6)}`}
+        points={`${x2},${y2} ${
+          x2 - arrowSize * Math.cos(angle + Math.PI / 6)
+        },${y2 - arrowSize * Math.sin(angle + Math.PI / 6)} ${
+          x2 - arrowSize * Math.cos(angle - Math.PI / 6)
+        },${y2 - arrowSize * Math.sin(angle - Math.PI / 6)}`}
         fill={color}
       />
 
-      {/* ✅ Выносная линия для коротких стрелок */}
       {showLeaderLine && (
         <line
           x1={midX}
@@ -705,7 +1457,6 @@ const PaddingArrow: React.FC<PaddingArrowProps> = ({
         />
       )}
 
-      {/* Подпись с умным позиционированием */}
       <text
         x={textX}
         y={textY}
@@ -719,7 +1470,6 @@ const PaddingArrow: React.FC<PaddingArrowProps> = ({
         {label}: {value}
       </text>
 
-      {/* Фон для текста (улучшает читаемость) */}
       {isShort && (
         <rect
           x={textX - 40}
@@ -734,7 +1484,6 @@ const PaddingArrow: React.FC<PaddingArrowProps> = ({
         />
       )}
 
-      {/* Индикатор hover */}
       {isHovered && !isFocusMode && (
         <circle
           cx={midX}
@@ -750,16 +1499,6 @@ const PaddingArrow: React.FC<PaddingArrowProps> = ({
   );
 };
 
-function parseLocationValue(value: any): number {
-  if (typeof value === 'number') return value;
-  if (typeof value === 'string') {
-    const num = parseInt(value);
-    if (!isNaN(num)) return num;
-  }
-  return 0;
-}
-
-// ✅ NEW: Компонент ручки для изменения границы
 interface BoundaryHandleProps {
   x: number;
   y: number;
@@ -767,7 +1506,12 @@ interface BoundaryHandleProps {
   onMouseDown: (e: React.MouseEvent) => void;
 }
 
-const BoundaryHandle: React.FC<BoundaryHandleProps> = ({ x, y, cursor, onMouseDown }) => {
+const BoundaryHandle: React.FC<BoundaryHandleProps> = ({
+  x,
+  y,
+  cursor,
+  onMouseDown
+}) => {
   const [isHovered, setIsHovered] = useState(false);
 
   return (
@@ -777,14 +1521,7 @@ const BoundaryHandle: React.FC<BoundaryHandleProps> = ({ x, y, cursor, onMouseDo
       onMouseDown={onMouseDown}
       style={{ cursor, pointerEvents: 'all' }}
     >
-      {/* Прозрачная область для клика */}
-      <circle
-        cx={x}
-        cy={y}
-        r={12}
-        fill="transparent"
-      />
-      {/* Видимая ручка */}
+      <circle cx={x} cy={y} r={12} fill="transparent" />
       <circle
         cx={x}
         cy={y}
@@ -793,13 +1530,7 @@ const BoundaryHandle: React.FC<BoundaryHandleProps> = ({ x, y, cursor, onMouseDo
         stroke="black"
         strokeWidth={2}
       />
-      {/* Внутренняя точка */}
-      <circle
-        cx={x}
-        cy={y}
-        r={2}
-        fill="black"
-      />
+      <circle cx={x} cy={y} r={2} fill="black" />
     </g>
   );
 };

@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { observer } from 'mobx-react-lite';
 import { Toolbar } from './Toolbar/Toolbar';
-import { ElementTree } from './Sidebar/ElementTree';
+import { SidebarContainer } from './Sidebar/SidebarContainer';
 import { CanvasStage } from './Canvas/CanvasStage';
 import { PropertiesPanel } from './Properties/PropertiesPanel';
 import { ResizablePanel } from '../Common/ResizablePanel';
@@ -32,7 +32,7 @@ export const Editor: React.FC = observer(() => {
                     maxWidth={600}
                 >
                     <div className="h-full border-r border-gray-200 bg-white overflow-hidden">
-                        <ElementTree />
+                        <SidebarContainer />
                     </div>
                 </ResizablePanel>
 

@@ -1,94 +1,86 @@
-/**
- * Типы для описания паттернов грамматики
- */
+// ===============================================
+// Pattern.ts - Type definitions
+// ===============================================
 
-export type PatternKind = 'cell' | 'area' | 'array' | 'array-in-context';
+export interface CountConstraint {
+  min?: number;
+  max?: number;
+}
+
+export interface StyleConstraint {
+  [key: string]: any;
+}
 
 export type Direction = 'row' | 'column' | 'fill';
 
-export type CountConstraint =
-    | number
-    | string
-    | { min?: number; max?: number };
-
 export interface LocationObject {
-    [key: string]: string | number | undefined;
-    'padding-top'?: string | number;
-    'padding-right'?: string | number;
-    'padding-bottom'?: string | number;
-    'padding-left'?: string | number;
-    'margin-top'?: string | number;
-    'margin-right'?: string | number;
-    'margin-bottom'?: string | number;
-    'margin-left'?: string | number;
-    top?: string | number;
-    right?: string | number;
-    bottom?: string | number;
-    left?: string | number;
+  top?: string;
+  left?: string;
+  right?: string;
+  bottom?: string;
+  'padding-top'?: string;
+  'padding-left'?: string;
+  'padding-right'?: string;
+  'padding-bottom'?: string;
+  'margin-top'?: string;
+  'margin-left'?: string;
+  'margin-right'?: string;
+  'margin-bottom'?: string;
+
+  width?: string;
+  height?: string;
 }
 
-export type Location =
-    | string[]
-    | LocationObject
-    | string;
-
-export interface StyleConstraint {
-    borders?: string | string[];
-    [key: string]: any;
-}
+export type Location = LocationObject | string | string[];
 
 export interface PatternDefinition {
-    kind?: PatternKind;
-    direction?: Direction;
-    description?: string;
-    item_pattern?: string;
-    item_count?: CountConstraint;
-    gap?: string | number;
-    size?: string;
-    content_type?: string;
+  kind: 'cell' | 'area' | 'array';
+  description?: string;
+  size?: string;
+  content_type?: string;
+  extends?: string[];
+  direction?: Direction;
+  item_pattern?: string;
+  item_count?: CountConstraint | string;
+  gap?: string;
+  style?: StyleConstraint;
 }
 
-export interface InnerPattern {
-    pattern?: string; // ✅ Optional - может быть pattern или pattern_definition
-    pattern_definition?: PatternDefinition;
-    location?: Location;
+export interface ComponentPattern {
+  pattern?: string;
+  pattern_definition?: PatternDefinition;
+  location?: Location;
 }
 
-export interface OuterPattern {
-    pattern: string; // ✅ Обязательное - outer всегда ссылается на конкретный паттерн
-    location?: Location;
-}
+// ✅ Экспортируем для PatternAdapter
+export type InnerPattern = ComponentPattern;
+export type OuterPattern = ComponentPattern;
 
 export interface Pattern {
-    description?: string;
-    kind: PatternKind;
-    root?: boolean;
-    count_in_document?: CountConstraint;
-    size?: string;
-    style?: StyleConstraint;
+  kind: 'cell' | 'area' | 'array';
+  description?: string;
+  size?: string;
+  root?: boolean;
+  count_in_document?: CountConstraint | string;
+  style?: StyleConstraint;
 
-    // Cell-specific
-    content_type?: string;
+  // Cell specific
+  content_type?: string;
+  extends?: string[];
 
-    // Area/Array
-    inner?: Record<string, InnerPattern>;
-    outer?: Record<string, OuterPattern>;
+  // Area/Array specific
+  inner?: { [key: string]: ComponentPattern };
+  outer?: { [key: string]: ComponentPattern };
 
-    // Array-specific
-    direction?: Direction;
-    item_pattern?: string;
-    item_count?: CountConstraint;
-    gap?: string | number;
-    pattern_definition?: PatternDefinition;
-}
+  // Array specific
+  direction?: Direction;
+  item_pattern?: string;
+  item_count?: CountConstraint | string;
+  gap?: string;
 
-// Вспомогательные типы
-export interface PatternWithName extends Pattern {
-    name: string;
-}
-
-export interface PatternReference {
-    patternName: string;
-    key: string;
-    type: 'inner' | 'outer';
+  // ✅ Canvas editor bounds
+  editor_bounds?: {
+    width: number;
+    height: number;
+  };
 }

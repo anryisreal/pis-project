@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { StoreProvider } from './hooks/useStores';
 import { RootStore } from './stores/RootStore';
-import { Editor } from './components/Editor/Editor';
+import { Editor } from './components/Editor/EditorWithTabs';
 import { ErrorBoundary } from 'react-error-boundary';
 import { StorageService } from './services/StorageService';
 
